@@ -27,16 +27,16 @@ public class Server {
 
 	public static void main(String[] args) throws IOException {
 		try (ServerSocket serverSocket = new ServerSocket(Integer.parseInt(args[0]))) {
-			Path path = Paths.get(args[1]);
+			Path rootPath = Paths.get(args[1]).normalize().toAbsolutePath();
 	
 			for (;;) {
 				final Socket socket = serverSocket.accept();
-				new Thread(() -> serveClient(socket, path)).start();
+				new Thread(() -> serveClient(socket, rootPath)).start();
 			}
 		}
 	}
 
-	private static void serveClient(Socket socket, Path path) {
+	private static void serveClient(Socket socket, Path rootPath) {
 		try(InputStream in = socket.getInputStream();
 				Scanner scanner = new Scanner(in);
 				OutputStream out = socket.getOutputStream()) {
@@ -64,9 +64,9 @@ public class Server {
 			}
 
 			if (uri.startsWith("/browse/")) {
-				showPath(path, uri.substring(8), out);
+				showPath(rootPath, uri.substring(8), out);
 			} else if (uri.startsWith("/download/")) {
-				downloadPath(path, uri.substring(10), out);
+				downloadPath(rootPath, uri.substring(10), out);
 			}
 
 			socket.close();
@@ -76,7 +76,7 @@ public class Server {
 	}
 
 	private static void showPath(Path rootPath, String uri, OutputStream out) throws IOException {
-		System.out.println("Browse " + uri);
+		System.out.printf("Browse %s\n", (uri.isEmpty() ? "root" : uri));
 
 		Path path = rootPath.resolve(uri);
 		if (!Files.exists(path) || !Files.isDirectory(path))
@@ -90,15 +90,26 @@ public class Server {
 			writer.write("HTTP/1.1 200 OK\r\n");
 			writer.write("\r\n");
 			writer.write("<html><head><title>Files</title></head><body>");
-			writer.write(String.format("<a href=\"/download/%s\">Download folder</a><br>",
+			writer.write(String.format("<a href=\"/download/%s\">Download folder as zip</a><br>",
 					URLEncoder.encode(rootPath.relativize(path).toString().replaceAll("\\\\", "/"), "UTF-8")));
 			writer.write("<ul>");
 
+			// If not root add .. link
+			if (!rootPath.toAbsolutePath().startsWith(path)) {
+				Path p = path.resolve("..").normalize();
+				String relative = URLEncoder.encode(rootPath.relativize(p).toString().replaceAll("\\\\", "/"),
+						"UTF-8");
+
+				writer.write(String.format("<li><a href=\"/browse/%s\">%s</a></li>", relative, ".."));
+			}
+
 			for (Path p : stream) {
-				String relative = URLEncoder.encode(rootPath.relativize(p).toString().replaceAll("\\\\", "/"), "UTF-8");
+				String relative = URLEncoder.encode(rootPath.relativize(p).toString().replaceAll("\\\\", "/"),
+						"UTF-8");
 
 				if (Files.isDirectory(p)) {
-					writer.write(String.format("<li><a href=\"/browse/%s\">%s</a>: <a href=\"/download/%s\">Download</a></li>",
+					writer.write(String.format("<li><a href=\"/browse/%s\">%s</a>: "
+							+ "<a href=\"/download/%s\">(Download as zip)</a></li>",
 							relative, p.getFileName(), relative));
 				} else {
 					writer.write(String.format("<li><a href=\"/download/%s\">%s</a></li>",
@@ -111,7 +122,7 @@ public class Server {
 	}
 
 	private static void downloadPath(Path rootPath, String uri, OutputStream out) throws IOException {
-		System.out.println("Download " + uri);
+		System.out.printf("Download %s\n", (uri.isEmpty() ? "root" : uri));
 
 		Path path = rootPath.resolve(uri);
 		if (!Files.exists(path))
@@ -143,7 +154,8 @@ public class Server {
 				try (ZipOutputStream zipOut = new ZipOutputStream(out)) {
 					Files.walkFileTree(path, new FileVisitor<Path>() {
 						@Override
-						public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+						public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs)
+								throws IOException {
 							if (dir.equals(path))
 								return FileVisitResult.CONTINUE;
 
